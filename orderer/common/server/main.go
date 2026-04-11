@@ -42,6 +42,7 @@ import (
 	"github.com/hyperledger/fabric/orderer/common/metadata"
 	"github.com/hyperledger/fabric/orderer/common/multichannel"
 	"github.com/hyperledger/fabric/orderer/consensus"
+	"github.com/hyperledger/fabric/orderer/consensus/bdls"
 	"github.com/hyperledger/fabric/orderer/consensus/etcdraft"
 	"github.com/hyperledger/fabric/orderer/consensus/smartbft"
 	"github.com/hyperledger/fabric/protoutil"
@@ -62,6 +63,11 @@ var (
 	clusterTypes = map[string]struct{}{
 		"etcdraft": {},
 		"BFT":      {},
+		// BDLS reuses the same cluster gRPC transport as etcdraft/BFT —
+		// a channel running BDLS is, from the cluster layer's point of
+		// view, indistinguishable from a BFT channel. The per-channel
+		// dispatch happens inside orderer/consensus/bdls.Dispatcher.
+		"BDLS": {},
 	}
 )
 
@@ -636,6 +642,17 @@ func initializeMultichannelRegistrar(
 	etcdraftConsenter, clusterMetrics := etcdraft.New(clusterDialer, conf, srvConf, srv, registrar, metricsProvider, bccsp)
 	consenters["etcdraft"] = etcdraftConsenter
 	consenters["BFT"] = smartbft.New(dpmr.Registry(), signer, clusterDialer, conf, srvConf, srv, registrar, metricsProvider, clusterMetrics, bccsp)
+
+	// BDLS is the third cluster consenter. The constructor shape matches
+	// smartbft.New 1:1 so the signature stays symmetrical with the line
+	// above. Until Phase C7b wires the BCCSP→SignDigest callback and the
+	// cluster.RPC fan-out, Consenter.HandleChain returns
+	// bdls.ErrHandleChainNotFullyWired and the Registrar will refuse to
+	// load any channel that declares ConsensusType=BDLS. That's
+	// intentional: the consenter being reachable as an instance means
+	// IsChannelMember works for cluster-join detection even before the
+	// run-loop is wired.
+	consenters["BDLS"] = bdls.New(signer, clusterDialer, conf, srvConf, srv, registrar, metricsProvider, clusterMetrics, bccsp)
 
 	registrar.Initialize(consenters)
 	return registrar
