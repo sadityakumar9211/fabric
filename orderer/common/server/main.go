@@ -641,21 +641,68 @@ func initializeMultichannelRegistrar(
 	// the orderer can start without channels at all and have an initialized cluster type consenter
 	etcdraftConsenter, clusterMetrics := etcdraft.New(clusterDialer, conf, srvConf, srv, registrar, metricsProvider, bccsp)
 	consenters["etcdraft"] = etcdraftConsenter
-	consenters["BFT"] = smartbft.New(dpmr.Registry(), signer, clusterDialer, conf, srvConf, srv, registrar, metricsProvider, clusterMetrics, bccsp)
+	smartBFTConsenter := smartbft.New(dpmr.Registry(), signer, clusterDialer, conf, srvConf, srv, registrar, metricsProvider, clusterMetrics, bccsp)
+	consenters["BFT"] = smartBFTConsenter
 
-	// BDLS is the third cluster consenter. The constructor shape matches
-	// smartbft.New 1:1 so the signature stays symmetrical with the line
-	// above. Until Phase C7b wires the BCCSP→SignDigest callback and the
-	// cluster.RPC fan-out, Consenter.HandleChain returns
-	// bdls.ErrHandleChainNotFullyWired and the Registrar will refuse to
-	// load any channel that declares ConsensusType=BDLS. That's
-	// intentional: the consenter being reachable as an instance means
-	// IsChannelMember works for cluster-join detection even before the
-	// run-loop is wired.
-	consenters["BDLS"] = bdls.New(signer, clusterDialer, conf, srvConf, srv, registrar, metricsProvider, clusterMetrics, bccsp)
+	// BDLS is the third cluster consenter. It reuses smartbft's cluster
+	// transport wholesale: one AuthCommMgr, one ClusterNodeServiceServer
+	// registration (gRPC only permits a single one), one connection
+	// pool. We hand smartbft's Comm + ClusterService to bdls.New so
+	// both consenters share those primitives, then replace the
+	// ClusterService's RequestHandler with a two-stop multiplex that
+	// routes each inbound StepRequest to whichever consenter owns the
+	// target channel. The original smartbft Ingress is kept as the
+	// first stop — it already returns `channel %s doesn't exist` for
+	// non-BFT channels, which is exactly the signal the multiplex uses
+	// to fall through to bdls.Dispatcher.
+	bdlsConsenter := bdls.New(signer, clusterDialer, conf, srvConf, srv, registrar, metricsProvider, clusterMetrics, bccsp, smartBFTConsenter.Comm, smartBFTConsenter.ClusterService)
+	consenters["BDLS"] = bdlsConsenter
+
+	smartBFTConsenter.ClusterService.RequestHandler = &clusterRequestMultiplexer{
+		primary: smartBFTConsenter.ClusterService.RequestHandler,
+		fallback: &bdls.Dispatcher{
+			Logger:        flogging.MustGetLogger("orderer.consensus.bdls.dispatcher"),
+			ChainSelector: bdlsConsenter,
+		},
+	}
 
 	registrar.Initialize(consenters)
 	return registrar
+}
+
+// clusterRequestMultiplexer routes an inbound cluster.Handler call to the
+// first handler that claims the channel. Smartbft's Ingress is the primary
+// — if it owns the channel, we stop there; if it returns
+// `channel %s doesn't exist`, we try the BDLS Dispatcher (fallback). Any
+// other error is returned verbatim. The string match is a little unlovely,
+// but smartbft and bdls both use exactly the same wording
+// ("channel %s doesn't exist") so the coupling is symmetric — and the
+// alternative (adding a typed error to both packages) would force changes
+// to smartbft for a BDLS-side concern.
+type clusterRequestMultiplexer struct {
+	primary  cluster.Handler
+	fallback cluster.Handler
+}
+
+func (m *clusterRequestMultiplexer) OnConsensus(channel string, sender uint64, req *ab.ConsensusRequest) error {
+	if err := m.primary.OnConsensus(channel, sender, req); err == nil || !isChannelNotFound(err) {
+		return err
+	}
+	return m.fallback.OnConsensus(channel, sender, req)
+}
+
+func (m *clusterRequestMultiplexer) OnSubmit(channel string, sender uint64, req *ab.SubmitRequest) error {
+	if err := m.primary.OnSubmit(channel, sender, req); err == nil || !isChannelNotFound(err) {
+		return err
+	}
+	return m.fallback.OnSubmit(channel, sender, req)
+}
+
+// isChannelNotFound is the "try the fallback" sentinel. Both smartbft's
+// Ingress and bdls.Dispatcher format this error as
+// `channel <id> doesn't exist`, so a suffix match is unambiguous.
+func isChannelNotFound(err error) bool {
+	return err != nil && bytes.Contains([]byte(err.Error()), []byte("doesn't exist"))
 }
 
 func newOperationsSystem(ops localconfig.Operations, metrics localconfig.Metrics) *operations.System {

@@ -11,7 +11,9 @@ import (
 	"crypto/ecdsa"
 	"encoding/pem"
 	"reflect"
+	"time"
 
+	bdlslib "github.com/BDLS-bft/bdls"
 	"github.com/hyperledger/fabric-lib-go/bccsp"
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-lib-go/common/metrics"
@@ -104,17 +106,40 @@ type Consenter struct {
 	ClusterDialer *cluster.PredicateDialer
 	// Registrar is used by ReceiverByChain to look up per-channel chains.
 	Registrar *multichannel.Registrar
+
+	// Comm is the cluster.Communicator BDLS uses to send outbound
+	// StepRequests. It is shared with smartbft: main.go constructs one
+	// AuthCommMgr inside smartbft.New, then hands the same instance to
+	// bdls.New so both consenters share a single connection pool and
+	// single dial-in credentials. Per-channel fan-out happens via
+	// cluster.RPC (one RPC per channel per consenter) wrapping this
+	// shared Comm. BDLS HandleChain calls Comm.Configure(channel, nodes)
+	// to register the channel's participant set.
+	Comm cluster.Communicator
+	// ClusterService is the shared cluster.ClusterService registered on
+	// the gRPC server by smartbft.New (only one
+	// ClusterNodeServiceServer can be registered per grpc.Server, so we
+	// piggyback on smartbft's instead of creating a second one). BDLS
+	// HandleChain calls ClusterService.ConfigureNodeCerts(channel,
+	// consenters) to register which remote identities are authorized to
+	// send StepRequests on each BDLS channel. main.go also replaces
+	// ClusterService.RequestHandler with a multiplex handler that
+	// dispatches to whichever of smartbft/bdls owns the target channel.
+	ClusterService *cluster.ClusterService
 }
 
 // New constructs a BDLS consenter. Shape matches smartbft.New so
 // orderer/common/server/main.go can slot it in next to the BFT
-// consenter with one additional line.
+// consenter with one additional line, plus two extra arguments
+// (comm, clusterSvc) for the shared cluster transport.
 //
 // The srvConf / srv arguments are accepted for signature compatibility
-// but not used yet — the BDLS consenter piggybacks on the cluster gRPC
-// service that smartbft registers (see Phase C7c for the shared
-// request-handler wiring). Phase C7c will also stash the server side
-// if we end up needing to intercept the StepRequest stream directly.
+// but not used directly — BDLS piggybacks on the ClusterNodeService
+// that smartbft registers on srv. Sharing one ClusterNodeServiceServer
+// between consenters is not optional: gRPC only permits a single
+// registration per service per server. See cluster_wiring.go and the
+// multiplex handler installed in main.go for how inbound StepRequests
+// are routed to the right consenter.
 //
 // Cluster TLS private-key loading happens here rather than inside
 // HandleChain so that a misconfigured key is surfaced at orderer
@@ -136,6 +161,8 @@ func New(
 	metricsProvider metrics.Provider,
 	_ *cluster.Metrics,
 	csp bccsp.BCCSP,
+	clusterComm cluster.Communicator,
+	clusterSvc *cluster.ClusterService,
 ) *Consenter {
 	logger := flogging.MustGetLogger("orderer.consensus.bdls")
 
@@ -147,6 +174,8 @@ func New(
 		Conf:             conf,
 		ClusterDialer:    clusterDialer,
 		Registrar:        r,
+		Comm:             clusterComm,
+		ClusterService:   clusterSvc,
 	}
 	if signerSerializer != nil {
 		idBytes, err := signerSerializer.Serialize()
@@ -175,21 +204,19 @@ func New(
 
 // HandleChain is called by the Registrar when a channel using
 // ConsensusType=BDLS is (re)initialised. It parses the channel's BDLS
-// ConfigMetadata, detects our consenter id, and — as of Phase C7b —
-// builds a fully-populated bdls.Config with SignDigest + PublicKey
-// wired to the cluster TLS keypair.
-//
-// The only reason this still returns ErrHandleChainNotFullyWired is
-// that Phase C7c (the per-channel cluster.RPC egress fan-out) has not
-// landed yet: we have a configuration that WOULD spin up a BDLS
-// state machine, but nothing to plumb its outbound peer.Send calls
-// through. Once C7c lands, this function will construct and return a
-// live *Chain.
+// ConfigMetadata, detects our consenter id, builds a fully-populated
+// bdls.Config with SignDigest + PublicKey wired to the cluster TLS
+// keypair, configures the shared cluster transport (Comm +
+// ClusterService) for this channel, and returns a live *Chain ready
+// for Start().
 func (c *Consenter) HandleChain(support consensus.ConsenterSupport, metadata *cb.Metadata) (consensus.Chain, error) {
-	_ = metadata // unused until C7c reads previously committed decide proofs for catch-up
+	_ = metadata // decide-proof catch-up from committed metadata is a follow-up (see chain.go run loop)
 
 	if c.TLSPrivateKey == nil || c.TLSPublicKey == nil {
 		return nil, ErrClusterTLSKeyUnavailable
+	}
+	if c.Comm == nil || c.ClusterService == nil {
+		return nil, errors.New("bdls consenter: cluster Comm/ClusterService not wired; main.go must pass smartbft's shared instances into bdls.New")
 	}
 
 	md, err := parseConfigMetadata(support.SharedConfig().ConsensusMetadata())
@@ -220,14 +247,95 @@ func (c *Consenter) HandleChain(support consensus.ConsenterSupport, metadata *cb
 	cfg.PublicKey = c.TLSPublicKey
 	cfg.SignDigest = makeSignDigest(c.TLSPrivateKey)
 
-	// Phase C7c: construct the peer adapter slice from md.Consenters,
-	// plumb them and cfg into bdlslib.NewConsensus, wire the
-	// per-channel cluster.RPC, and return a real *Chain. For now, we
-	// validate that the Config would pass VerifyConfig (bdlslib checks
-	// it internally — calling it here is a free forward-check) and
-	// surface the still-pending state as a distinct error.
-	_ = cfg
-	return nil, ErrHandleChainNotFullyWired
+	// Resolve the channel's cluster-layer membership (TLS certs, MSP
+	// TLS root CAs, endpoints) by walking the last config block. This
+	// mirrors smartbft's remoteNodesFromConfigBlock so two cluster
+	// consenters on the same orderer never disagree about membership.
+	remoteNodes, channelConsenters, err := buildRemoteNodes(support, c.BCCSP, c.Logger)
+	if err != nil {
+		return nil, errors.Wrap(err, "building cluster remote-node view")
+	}
+
+	// Configure the *inbound* path: teach the shared ClusterService
+	// which identities are authorized to send StepRequests on this
+	// channel. Without this call, the multiplex handler would reach
+	// bdls.Dispatcher but the auth layer would reject the sender as
+	// "unknown".
+	if err := c.ClusterService.ConfigureNodeCerts(support.ChannelID(), channelConsenters); err != nil {
+		return nil, errors.Wrap(err, "configuring cluster service node certs")
+	}
+
+	// Configure the *outbound* path: register the channel's remote
+	// nodes with the shared AuthCommMgr so cluster.RPC.SendConsensus
+	// has a place to dial. Comm.Configure is idempotent on the
+	// (channel, members) pair — calling it again on chain rebuild
+	// replaces the previous member set cleanly.
+	c.Comm.Configure(support.ChannelID(), remoteNodes)
+
+	// Per-channel RPC wrapping the shared Comm. The 5-minute timeout
+	// matches smartbft's egress — long enough to tolerate a transient
+	// dial hiccup while smartbft/cluster reconnects, short enough that
+	// a genuinely dead peer does not pin a goroutine forever.
+	chanRPC := &cluster.RPC{
+		Logger:        flogging.MustGetLogger("orderer.consensus.bdls.rpc").With("channel", support.ChannelID()),
+		Channel:       support.ChannelID(),
+		StreamsByType: cluster.NewStreamsByType(),
+		Comm:          c.Comm,
+		Timeout:       5 * time.Minute,
+	}
+
+	// One peerAdapter per remote (non-self) consenter. The destination
+	// id is the channel-config consenter id (same one the
+	// ClusterService/AuthCommMgr use for routing), NOT the index into
+	// md.Consenters. We align the two slices by position since
+	// buildRemoteNodes returns channelConsenters in the same order as
+	// oc.Consenters(), and md.Consenters is populated from the same
+	// source at configtxgen time.
+	peers := make([]*peerAdapter, 0, len(channelConsenters)-1)
+	for i, co := range channelConsenters {
+		if uint64(i) == selfID {
+			continue
+		}
+		pub, err := publicKeyFromTLSCert(co.ServerTlsCert)
+		if err != nil {
+			return nil, errors.Wrapf(err, "extracting public key for consenter id=%d", co.Id)
+		}
+		pa, err := newPeerAdapter(
+			flogging.MustGetLogger("orderer.consensus.bdls.peer").With("channel", support.ChannelID()),
+			chanRPC,
+			support.ChannelID(),
+			uint64(co.Id),
+			pub,
+			co.Host,
+			co.Port,
+		)
+		if err != nil {
+			return nil, errors.Wrapf(err, "constructing peer adapter for consenter id=%d", co.Id)
+		}
+		peers = append(peers, pa)
+	}
+
+	// Construct the BDLS state machine. bdlslib.NewConsensus validates
+	// the Config internally (rejects too few participants, nil
+	// SignDigest, etc.), so any configuration bug we missed upstream
+	// shows up here with a descriptive error.
+	bdlsConsensus, err := bdlslib.NewConsensus(cfg)
+	if err != nil {
+		return nil, errors.Wrap(err, "bdlslib.NewConsensus")
+	}
+	// Join each peer into the consensus instance so BDLS can route
+	// outbound <propose>/<lock>/<decide> messages through our adapters.
+	for _, p := range peers {
+		bdlsConsensus.Join(p)
+	}
+
+	chain, err := NewChain(support, bdlsConsensus, md, peers, c.Metrics)
+	if err != nil {
+		return nil, errors.Wrap(err, "constructing BDLS chain")
+	}
+	c.Logger.Infof("BDLS HandleChain: channel=%s constructed live chain (peers=%d, selfID=%d)",
+		support.ChannelID(), len(peers), selfID)
+	return chain, nil
 }
 
 // ReceiverByChain implements the dispatcher.ReceiverGetter interface. It
