@@ -8,6 +8,7 @@ package bdls
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"encoding/pem"
 	"reflect"
 
@@ -58,10 +59,21 @@ import (
 //     is correct), but no channel actually uses BDLS for ordering yet.
 // ---------------------------------------------------------------------------
 
-// ErrHandleChainNotFullyWired is returned by HandleChain while the crypto /
-// cluster.RPC wiring is still pending. It is deliberately distinct from a
-// generic error so tests and operators can assert on it.
-var ErrHandleChainNotFullyWired = errors.New("bdls consenter: HandleChain stub — BCCSP signer / cluster.RPC wiring pending (see Phase C7b)")
+// ErrHandleChainNotFullyWired is returned by HandleChain while the
+// cluster.RPC egress wiring is still pending (Phase C7c). Signer
+// wiring was completed in C7b; what is still missing is the per-channel
+// fan-out of outbound BDLS messages onto the cluster gRPC transport.
+// Keeping a distinct error type means tests and operators can assert
+// on it instead of pattern-matching a string.
+var ErrHandleChainNotFullyWired = errors.New("bdls consenter: HandleChain stub — cluster.RPC egress wiring pending (see Phase C7c)")
+
+// ErrClusterTLSKeyUnavailable is returned by HandleChain when the BDLS
+// consenter was instantiated without a parseable cluster TLS private
+// key. The consenter still loads (so IsChannelMember works for
+// cluster-join detection on non-BDLS channels) but any attempt to run
+// a BDLS channel fails fast with this error rather than crashing deep
+// inside bdls.NewConsensus.
+var ErrClusterTLSKeyUnavailable = errors.New("bdls consenter: cluster TLS private key was not loaded at startup; set General.Cluster.ClientPrivateKey and restart the orderer")
 
 // Consenter is the BDLS implementation of consensus.Consenter. Fields mirror
 // smartbft.Consenter where they make sense so operators and reviewers who
@@ -72,6 +84,17 @@ type Consenter struct {
 	BCCSP            bccsp.BCCSP
 	SignerSerializer identity.SignerSerializer
 	Identity         []byte
+
+	// TLSPrivateKey is the orderer's cluster TLS private key, loaded
+	// from conf.General.Cluster.ClientPrivateKey at New() time. Its
+	// public half is what BDLS uses as our participant identity. See
+	// signer.go for the full "why this key, not the MSP identity key"
+	// rationale.
+	TLSPrivateKey *ecdsa.PrivateKey
+	// TLSPublicKey is derived from TLSPrivateKey and cached so the
+	// hot-path detectSelfID loop does not repeatedly reach through the
+	// pointer chain.
+	TLSPublicKey *ecdsa.PublicKey
 
 	// Conf is the top-level localconfig, used for Cluster timing knobs
 	// when we construct the BlockPuller.
@@ -88,10 +111,21 @@ type Consenter struct {
 // consenter with one additional line.
 //
 // The srvConf / srv arguments are accepted for signature compatibility
-// but not used yet — the BDLS consenter reuses the cluster gRPC service
-// that etcdraft and smartbft already register, rather than opening its
-// own listener. Phase C7b will stash them on the struct if we decide
-// we need to intercept the StepRequest stream directly.
+// but not used yet — the BDLS consenter piggybacks on the cluster gRPC
+// service that smartbft registers (see Phase C7c for the shared
+// request-handler wiring). Phase C7c will also stash the server side
+// if we end up needing to intercept the StepRequest stream directly.
+//
+// Cluster TLS private-key loading happens here rather than inside
+// HandleChain so that a misconfigured key is surfaced at orderer
+// startup (one log line) rather than once per channel at join time
+// (one log line per channel). If the key fails to load, the consenter
+// still instantiates — IsChannelMember only needs the MSP identity,
+// not the TLS private key — but HandleChain will refuse to run any
+// BDLS channel until the operator fixes the configuration. This is a
+// deliberate choice: we do not want a typo in General.Cluster.
+// ClientPrivateKey to crash an orderer that is also serving
+// etcdraft/BFT channels.
 func New(
 	signerSerializer identity.SignerSerializer,
 	clusterDialer *cluster.PredicateDialer,
@@ -122,21 +156,41 @@ func New(
 			c.Identity = idBytes
 		}
 	}
+
+	// Load the cluster TLS private key. Failure is logged but not
+	// fatal; HandleChain surfaces ErrClusterTLSKeyUnavailable when a
+	// BDLS channel actually tries to start.
+	if conf != nil {
+		keyPath := conf.General.Cluster.ClientPrivateKey
+		if priv, err := loadClusterTLSPrivateKey(keyPath); err != nil {
+			logger.Warnf("BDLS consenter: cluster TLS private key unavailable — BDLS channels will refuse to start until this is fixed: %v", err)
+		} else {
+			c.TLSPrivateKey = priv
+			c.TLSPublicKey = &priv.PublicKey
+			logger.Infof("BDLS consenter: loaded cluster TLS private key from %s", keyPath)
+		}
+	}
 	return c
 }
 
 // HandleChain is called by the Registrar when a channel using
 // ConsensusType=BDLS is (re)initialised. It parses the channel's BDLS
-// ConfigMetadata and detects our consenter id, then — in Phase C7b —
-// will go on to construct the live bdlslib.Consensus and return a Chain.
+// ConfigMetadata, detects our consenter id, and — as of Phase C7b —
+// builds a fully-populated bdls.Config with SignDigest + PublicKey
+// wired to the cluster TLS keypair.
 //
-// Keeping the parse/detect side on `main` means registration is not a
-// dangling dead code path: operator tooling that validates channel
-// configs against the installed consenter gets real feedback for
-// malformed ConfigMetadata, even before end-to-end ordering is
-// available.
+// The only reason this still returns ErrHandleChainNotFullyWired is
+// that Phase C7c (the per-channel cluster.RPC egress fan-out) has not
+// landed yet: we have a configuration that WOULD spin up a BDLS
+// state machine, but nothing to plumb its outbound peer.Send calls
+// through. Once C7c lands, this function will construct and return a
+// live *Chain.
 func (c *Consenter) HandleChain(support consensus.ConsenterSupport, metadata *cb.Metadata) (consensus.Chain, error) {
-	_ = metadata // unused until C7b reads previously committed decide proofs for catch-up
+	_ = metadata // unused until C7c reads previously committed decide proofs for catch-up
+
+	if c.TLSPrivateKey == nil || c.TLSPublicKey == nil {
+		return nil, ErrClusterTLSKeyUnavailable
+	}
 
 	md, err := parseConfigMetadata(support.SharedConfig().ConsensusMetadata())
 	if err != nil {
@@ -149,15 +203,30 @@ func (c *Consenter) HandleChain(support consensus.ConsenterSupport, metadata *cb
 	}
 	c.Logger.Infof("BDLS HandleChain: channel=%s selfID=%d consenters=%d", support.ChannelID(), selfID, len(md.Consenters))
 
-	// Build the bdls.Config skeleton — Δ knobs, participants,
-	// StateCompare / StateValidate, ReliableDecide default. Kept here
-	// even though we don't hand it to NewConsensus yet so that a
-	// malformed Options block (e.g. negative Δ, too few consenters) is
-	// surfaced as a HandleChain error, not silently tolerated.
-	if _, err := buildBDLSConfig(md, support.Height()); err != nil {
+	// Build the bdls.Config: Δ knobs, participants, StateCompare /
+	// StateValidate, ReliableDecide default. A malformed Options block
+	// (e.g. negative Δ, too few consenters) is surfaced as a
+	// HandleChain error rather than silently tolerated.
+	cfg, err := buildBDLSConfig(md, support.Height())
+	if err != nil {
 		return nil, errors.Wrap(err, "building bdls.Config")
 	}
 
+	// Wire the signer. From BDLS's point of view this turns our Config
+	// from a "verify-only" skeleton into a fully-functional consensus
+	// identity: SignDigest is called each time BDLS emits a
+	// <propose>/<lock>/<decide>, PublicKey is used to derive the
+	// participant identity on verify.
+	cfg.PublicKey = c.TLSPublicKey
+	cfg.SignDigest = makeSignDigest(c.TLSPrivateKey)
+
+	// Phase C7c: construct the peer adapter slice from md.Consenters,
+	// plumb them and cfg into bdlslib.NewConsensus, wire the
+	// per-channel cluster.RPC, and return a real *Chain. For now, we
+	// validate that the Config would pass VerifyConfig (bdlslib checks
+	// it internally — calling it here is a free forward-check) and
+	// surface the still-pending state as a distinct error.
+	_ = cfg
 	return nil, ErrHandleChainNotFullyWired
 }
 
@@ -240,50 +309,34 @@ func (c *Consenter) IsChannelMember(joinBlock *cb.Block) (bool, error) {
 }
 
 // detectSelfID finds this orderer's position in the channel's BDLS
-// consenter set by matching TLS cert public keys against our own identity.
-// The returned id is the zero-based index into md.Consenters; BDLS itself
-// derives the numeric participant id from the (X, Y) public-key coordinates
-// via DefaultPubKeyToIdentity and does not actually need this integer, so
-// it is used only for logging and for cluster.RPC routing in C7b.
+// consenter set by matching the cluster TLS public key we loaded in
+// New() against each consenter's ServerTlsCert. The returned id is the
+// zero-based index into md.Consenters; BDLS itself derives the numeric
+// participant id from the (X, Y) public-key coordinates via
+// DefaultPubKeyToIdentity and does not actually need this integer, so
+// it is used only for logging and for cluster.RPC routing in C7c.
 //
-// Membership matching uses sanitized-cert public-key equality, identical
-// to IsChannelMember above and to smartbft's detectSelfID. Keeping the two
-// helpers byte-for-byte consistent means a node that IsChannelMember says
-// "yes" to will always find itself in detectSelfID, and vice versa.
+// Note: we intentionally compare *public keys*, not sanitized-cert
+// bytes. IsChannelMember above does the cert-bytes comparison because
+// it operates against the orderer's MSP identity (which is the Fabric-
+// wide convention for "is this orderer a member of this channel"); but
+// for BDLS participant identity, the cluster TLS keypair is the source
+// of truth — see signer.go for the full rationale. A node that
+// IsChannelMember says "yes" to should still find itself here as long
+// as the operator kept their MSP cert and cluster TLS cert consistent
+// inside ConfigMetadata.Consenters, which is the ConsenterMapping
+// convention the configtx encoder enforces.
 func (c *Consenter) detectSelfID(md *bdlsproto.ConfigMetadata) (uint64, error) {
-	if len(c.Identity) == 0 {
-		return 0, errors.New("consenter has no serialised identity (New was called with nil SignerSerializer?)")
+	if c.TLSPublicKey == nil {
+		return 0, errors.New("consenter has no cluster TLS public key (loadClusterTLSPrivateKey failed at startup?)")
 	}
-	sanitizedSelf, err := crypto.SanitizeX509Cert(c.Identity)
-	if err != nil {
-		return 0, errors.Wrap(err, "sanitising own identity cert")
-	}
-	selfBlock, _ := pem.Decode(sanitizedSelf)
-	if selfBlock == nil {
-		return 0, errors.Errorf("own identity is not a valid PEM: %s", string(sanitizedSelf))
-	}
-	selfPub, err := cluster.ExtractPublicKeyFromCert(selfBlock.Bytes)
-	if err != nil {
-		return 0, errors.Wrap(err, "extracting own TLS public key")
-	}
-
 	for i, co := range md.Consenters {
-		sanitized, err := crypto.SanitizeX509Cert(co.ServerTlsCert)
-		if err != nil {
-			c.Logger.Warnf("BDLS detectSelfID: consenter %d cert sanitize failed: %v", i, err)
-			continue
-		}
-		block, _ := pem.Decode(sanitized)
-		if block == nil {
-			c.Logger.Warnf("BDLS detectSelfID: consenter %d cert is not valid PEM", i)
-			continue
-		}
-		pub, err := cluster.ExtractPublicKeyFromCert(block.Bytes)
+		pub, err := publicKeyFromTLSCert(co.ServerTlsCert)
 		if err != nil {
 			c.Logger.Warnf("BDLS detectSelfID: consenter %d public key extract failed: %v", i, err)
 			continue
 		}
-		if bytes.Equal(selfPub, pub) {
+		if publicKeysEqual(c.TLSPublicKey, pub) {
 			return uint64(i), nil
 		}
 	}
