@@ -33,41 +33,14 @@ import (
 
 // ---------------------------------------------------------------------------
 // Consenter wires the BDLS chain into Fabric's orderer. The shape of New()
-// matches smartbft.New() 1:1 so orderer/common/server/main.go can register
-// us next to the BFT consenter with a single line (Phase C9).
-//
-// Scope split:
-//
-//   * This file implements the pieces that do not require deep MSP / BCCSP
-//     key-handle plumbing:
-//       - New() constructor
-//       - IsChannelMember()        (read-only channel-config inspection)
-//       - ReceiverByChain()        (Registrar lookup)
-//       - TargetChannel()          (proto switch)
-//       - detectSelfID()           (TLS cert → consenter id)
-//
-//   * HandleChain() currently parses the channel metadata end-to-end and
-//     detects selfID, but stops short of constructing the live BDLS state
-//     machine. The last mile — turning a Fabric BCCSP signer into a
-//     bdlslib.Config.SignDigest callback, plus wiring the cluster.RPC
-//     fan-out for outbound messages — is tracked as a follow-up (Phase
-//     C7b) because it needs to reach into the MSP signing-identity to
-//     get at the raw bccsp.Key, and that plumbing is invasive enough to
-//     deserve its own review.
-//
-//     Until C7b lands, HandleChain returns ErrHandleChainNotFullyWired.
-//     Registration in main.go (C9) is therefore gated: the consenter is
-//     instantiated and IsChannelMember works (so cluster-join detection
-//     is correct), but no channel actually uses BDLS for ordering yet.
+// matches smartbft.New() with two extra arguments (cluster.Communicator,
+// *cluster.ClusterService) that main.go fills in by sharing smartbft's
+// instances — gRPC only permits one ClusterNodeServiceServer registration
+// per server, and a single AuthCommMgr keeps connection state in one place.
+// See orderer/common/server/main.go for the multiplex handler that fans
+// inbound StepRequests out to whichever consenter (smartbft or bdls) owns
+// the target channel.
 // ---------------------------------------------------------------------------
-
-// ErrHandleChainNotFullyWired is returned by HandleChain while the
-// cluster.RPC egress wiring is still pending (Phase C7c). Signer
-// wiring was completed in C7b; what is still missing is the per-channel
-// fan-out of outbound BDLS messages onto the cluster gRPC transport.
-// Keeping a distinct error type means tests and operators can assert
-// on it instead of pattern-matching a string.
-var ErrHandleChainNotFullyWired = errors.New("bdls consenter: HandleChain stub — cluster.RPC egress wiring pending (see Phase C7c)")
 
 // ErrClusterTLSKeyUnavailable is returned by HandleChain when the BDLS
 // consenter was instantiated without a parseable cluster TLS private
