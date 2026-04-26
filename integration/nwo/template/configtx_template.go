@@ -185,6 +185,17 @@ Profiles:{{ range .Profiles }}
         Identity: {{ $w.OrdererSignCert .}}
         {{- end }}{{- end }}
       {{- end }}
+      {{- if eq $w.Consensus.Type "BDLS" }}
+      ConsenterMapping:{{ range $index, $orderer := .Orderers }}{{ with $w.Orderer . }}
+      - ID: {{ .Id }}
+        Host: 127.0.0.1
+        Port: {{ $w.OrdererPort . "Cluster" }}
+        MSPID: {{ ($w.Organization .Organization).MSPID}}
+        ClientTLSCert: {{ $w.OrdererLocalCryptoDir . "tls" }}/server.crt
+        ServerTLSCert: {{ $w.OrdererLocalCryptoDir . "tls" }}/server.crt
+        Identity: {{ $w.OrdererSignCert .}}
+        {{- end }}{{- end }}
+      {{- end }}
       {{- if eq $w.Consensus.Type "etcdraft" }}
       EtcdRaft:
         Options:
