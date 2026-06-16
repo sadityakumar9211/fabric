@@ -87,9 +87,13 @@ func buildBDLSConfig(md *bdlsproto.ConfigMetadata, currentHeight uint64) (*bdlsl
 	if err != nil {
 		return nil, err
 	}
+	var startHeight uint64
+	if currentHeight > 0 {
+		startHeight = currentHeight - 1
+	}
 	cfg := &bdlslib.Config{
 		Epoch:         time.Now(),
-		CurrentHeight: currentHeight,
+		CurrentHeight: startHeight,
 		Participants:  participants,
 		StateCompare:  compareState,
 		StateValidate: validateState,

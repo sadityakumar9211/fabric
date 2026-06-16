@@ -659,11 +659,12 @@ func initializeMultichannelRegistrar(
 	consenters["BDLS"] = bdlsConsenter
 
 	smartBFTConsenter.ClusterService.RequestHandler = &clusterRequestMultiplexer{
-		primary: smartBFTConsenter.ClusterService.RequestHandler,
+		primary:   smartBFTConsenter.ClusterService.RequestHandler,
 		fallback: &bdls.Dispatcher{
 			Logger:        flogging.MustGetLogger("orderer.consensus.bdls.dispatcher"),
 			ChainSelector: bdlsConsenter,
 		},
+		registrar: registrar,
 	}
 
 	registrar.Initialize(consenters)
@@ -671,20 +672,31 @@ func initializeMultichannelRegistrar(
 }
 
 // clusterRequestMultiplexer routes an inbound cluster.Handler call to the
-// first handler that claims the channel. Smartbft's Ingress is the primary
-// — if it owns the channel, we stop there; if it returns
-// `channel %s doesn't exist`, we try the BDLS Dispatcher (fallback). Any
-// other error is returned verbatim. The string match is a little unlovely,
-// but smartbft and bdls both use exactly the same wording
-// ("channel %s doesn't exist") so the coupling is symmetric — and the
-// alternative (adding a typed error to both packages) would force changes
-// to smartbft for a BDLS-side concern.
+// first handler that claims the channel. If the channel exists in the registrar
+// and is of type *bdls.Chain, we route it directly to the fallback (BDLS Dispatcher)
+// to avoid log spam and warnings from smartbft.
 type clusterRequestMultiplexer struct {
-	primary  cluster.Handler
-	fallback cluster.Handler
+	primary   cluster.Handler
+	fallback  cluster.Handler
+	registrar *multichannel.Registrar
+}
+
+func (m *clusterRequestMultiplexer) isBDLSChannel(channel string) bool {
+	if m.registrar == nil {
+		return false
+	}
+	cs := m.registrar.GetChain(channel)
+	if cs == nil {
+		return false
+	}
+	_, ok := cs.Chain.(*bdls.Chain)
+	return ok
 }
 
 func (m *clusterRequestMultiplexer) OnConsensus(channel string, sender uint64, req *ab.ConsensusRequest) error {
+	if m.isBDLSChannel(channel) {
+		return m.fallback.OnConsensus(channel, sender, req)
+	}
 	if err := m.primary.OnConsensus(channel, sender, req); err == nil || !isChannelNotFound(err) {
 		return err
 	}
@@ -692,6 +704,9 @@ func (m *clusterRequestMultiplexer) OnConsensus(channel string, sender uint64, r
 }
 
 func (m *clusterRequestMultiplexer) OnSubmit(channel string, sender uint64, req *ab.SubmitRequest) error {
+	if m.isBDLSChannel(channel) {
+		return m.fallback.OnSubmit(channel, sender, req)
+	}
 	if err := m.primary.OnSubmit(channel, sender, req); err == nil || !isChannelNotFound(err) {
 		return err
 	}
@@ -790,36 +805,37 @@ func (mgr *caManager) updateTrustedRoots(
 	}
 
 	cid := cm.ConfigtxValidator().ChannelID()
-	logger.Debugf("updating root CAs for channel [%s]", cid)
+	logger.Infof("updating root CAs for channel [%s]. appOrgMSPs=%v, ordOrgMSPs=%v", cid, appOrgMSPs, ordOrgMSPs)
 	msps, err := cm.MSPManager().GetMSPs()
 	if err != nil {
 		logger.Errorf("Error getting root CAs for channel %s (%s)", cid, err)
 		return
 	}
 	for k, v := range msps {
+		logger.Infof("channel [%s]: checking MSP [%s] type [%d]", cid, k, v.GetType())
 		// check to see if this is a FABRIC MSP
 		if v.GetType() == msp.FABRIC {
 			for _, root := range v.GetTLSRootCerts() {
 				// check to see of this is an app org MSP
 				if _, ok := appOrgMSPs[k]; ok {
-					logger.Debugf("adding app root CAs for MSP [%s]", k)
+					logger.Infof("adding app root CAs for MSP [%s]", k)
 					appRootCAs = append(appRootCAs, root)
 				}
 				// check to see of this is an orderer org MSP
 				if _, ok := ordOrgMSPs[k]; ok {
-					logger.Debugf("adding orderer root CAs for MSP [%s]", k)
+					logger.Infof("adding orderer root CAs for MSP [%s]", k)
 					ordererRootCAs = append(ordererRootCAs, root)
 				}
 			}
 			for _, intermediate := range v.GetTLSIntermediateCerts() {
 				// check to see of this is an app org MSP
 				if _, ok := appOrgMSPs[k]; ok {
-					logger.Debugf("adding app root CAs for MSP [%s]", k)
+					logger.Infof("adding app intermediate CAs for MSP [%s]", k)
 					appRootCAs = append(appRootCAs, intermediate)
 				}
 				// check to see of this is an orderer org MSP
 				if _, ok := ordOrgMSPs[k]; ok {
-					logger.Debugf("adding orderer root CAs for MSP [%s]", k)
+					logger.Infof("adding orderer intermediate CAs for MSP [%s]", k)
 					ordererRootCAs = append(ordererRootCAs, intermediate)
 				}
 			}

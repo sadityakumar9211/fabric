@@ -16,6 +16,7 @@ import (
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric-protos-go-apiv2/orderer"
+	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/orderer/consensus"
 	"github.com/hyperledger/fabric/protoutil"
 	"google.golang.org/protobuf/proto"
@@ -215,6 +216,7 @@ func NewChain(
 // Order accepts a client envelope for ordering. It enqueues the envelope on
 // submitC and returns immediately. Actual batching happens in run().
 func (c *Chain) Order(env *cb.Envelope, configSeq uint64) error {
+	c.logger.Debugf("bdls chain %s: Order received client transaction (configSeq %d)", c.channelID, configSeq)
 	select {
 	case c.submitC <- &submitReq{env: env, configSeq: configSeq}:
 		return nil
@@ -228,6 +230,7 @@ func (c *Chain) Order(env *cb.Envelope, configSeq uint64) error {
 // the participant set / Options changes take effect at a well-defined
 // height.
 func (c *Chain) Configure(env *cb.Envelope, configSeq uint64) error {
+	c.logger.Debugf("bdls chain %s: Configure received config transaction (configSeq %d)", c.channelID, configSeq)
 	select {
 	case c.configC <- &submitReq{env: env, configSeq: configSeq}:
 		return nil
@@ -275,6 +278,7 @@ func (c *Chain) Consensus(req *orderer.ConsensusRequest, sender uint64) error {
 	if req == nil || len(req.Payload) == 0 {
 		return fmt.Errorf("bdls chain %s: Consensus received empty payload from %d", c.channelID, sender)
 	}
+	c.logger.Debugf("bdls chain %s: Consensus received payload from %d, len %d", c.channelID, sender, len(req.Payload))
 	c.consensusMu.Lock()
 	defer c.consensusMu.Unlock()
 	return c.bdls.ReceiveMessage(req.Payload, time.Now())
@@ -286,6 +290,7 @@ func (c *Chain) Submit(req *orderer.SubmitRequest, sender uint64) error {
 	if req == nil || req.Payload == nil {
 		return fmt.Errorf("bdls chain %s: Submit received nil payload from %d", c.channelID, sender)
 	}
+	c.logger.Debugf("bdls chain %s: Submit received forwarded transaction from %d", c.channelID, sender)
 	return c.Order(req.Payload, req.LastValidationSeq)
 }
 
@@ -303,16 +308,48 @@ func (c *Chain) run() {
 	decidePoll := time.NewTicker(c.decidePollInterval)
 	defer decidePoll.Stop()
 
+	ticking := false
+	timer := time.NewTimer(time.Second)
+	if !timer.Stop() {
+		<-timer.C
+	}
+
+	startTimer := func() {
+		if !ticking {
+			ticking = true
+			timer.Reset(c.support.SharedConfig().BatchTimeout())
+		}
+	}
+
+	stopTimer := func() {
+		if !timer.Stop() && ticking {
+			<-timer.C
+		}
+		ticking = false
+	}
+
 	for {
 		select {
 		case <-c.haltC:
 			return
 
 		case req := <-c.submitC:
-			c.handleSubmit(req)
+			c.handleSubmit(req, startTimer, stopTimer)
 
 		case req := <-c.configC:
+			stopTimer()
 			c.handleConfig(req)
+
+		case <-timer.C:
+			ticking = false
+			batch := c.support.BlockCutter().Cut()
+			if len(batch) > 0 {
+				c.logger.Debugf("Batch timer expired, creating block")
+				if err := c.proposeBatch(batch); err != nil {
+					c.fatalf("proposeBatch (timer) failed: %v", err)
+					return
+				}
+			}
 
 		case <-tick.C:
 			c.tickBDLS()
@@ -327,18 +364,24 @@ func (c *Chain) run() {
 // each full batch the cutter emits, proposes the assembled block to BDLS.
 // Messages whose configSeq is stale against the current support.Sequence
 // are dropped — the support has already moved past them.
-func (c *Chain) handleSubmit(req *submitReq) {
+func (c *Chain) handleSubmit(req *submitReq, startTimer func(), stopTimer func()) {
 	if c.support.Sequence() > req.configSeq {
 		c.logger.Debugf("Dropping stale envelope (configSeq %d < current %d)", req.configSeq, c.support.Sequence())
 		return
 	}
 
-	batches, _ := c.support.BlockCutter().Ordered(req.env)
+	batches, pending := c.support.BlockCutter().Ordered(req.env)
 	for _, batch := range batches {
 		if err := c.proposeBatch(batch); err != nil {
 			c.fatalf("proposeBatch failed: %v", err)
 			return
 		}
+	}
+
+	if len(batches) == 0 && pending {
+		startTimer()
+	} else if !pending {
+		stopTimer()
 	}
 }
 
@@ -491,8 +534,14 @@ func (c *Chain) fatalf(format string, args ...interface{}) {
 	c.haltOnce.Do(func() { close(c.haltC) })
 }
 
+// StatusReport returns the ConsensusRelation & Status
+func (c *Chain) StatusReport() (types.ConsensusRelation, types.Status) {
+	return types.ConsensusRelationConsenter, types.StatusActive
+}
+
 // Compile-time assertions keep interface drift honest.
 var (
-	_ consensus.Chain = (*Chain)(nil)
-	_ MessageReceiver = (*Chain)(nil)
+	_ consensus.Chain          = (*Chain)(nil)
+	_ consensus.StatusReporter = (*Chain)(nil)
+	_ MessageReceiver          = (*Chain)(nil)
 )

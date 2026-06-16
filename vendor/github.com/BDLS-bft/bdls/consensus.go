@@ -194,14 +194,21 @@ func (r *consensusRound) SignedCommits() []*SignedProto {
 
 // GetMaxProposed finds the most agreed-on non-nil state, if these is any.
 func (r *consensusRound) GetMaxProposed() (s State, count int) {
-	if len(r.roundChanges) == 0 {
+	var nonNilTuples []messageTuple
+	for i := range r.roundChanges {
+		if r.roundChanges[i].Message.State != nil {
+			nonNilTuples = append(nonNilTuples, r.roundChanges[i])
+		}
+	}
+
+	if len(nonNilTuples) == 0 {
 		return nil, 0
 	}
 
 	// sort by hash, to group identical hashes together
 	// O(n*logn)
 	sorter := tupleSorter{
-		tuples: r.roundChanges,
+		tuples: nonNilTuples,
 		// sort by it's hash lexicographically
 		by: func(t1, t2 *messageTuple) bool {
 			return bytes.Compare(t1.StateHash[:], t2.StateHash[:]) < 0
@@ -212,17 +219,17 @@ func (r *consensusRound) GetMaxProposed() (s State, count int) {
 	// find the maximum occurred hash
 	// O(n)
 	maxCount := 1
-	maxState := r.roundChanges[0]
+	maxState := sorter.tuples[0]
 	curCount := 1
 
-	n := len(r.roundChanges)
+	n := len(sorter.tuples)
 	for i := 1; i < n; i++ {
-		if r.roundChanges[i].StateHash == r.roundChanges[i-1].StateHash {
+		if sorter.tuples[i].StateHash == sorter.tuples[i-1].StateHash {
 			curCount++
 		} else {
 			if curCount > maxCount {
 				maxCount = curCount
-				maxState = r.roundChanges[i-1]
+				maxState = sorter.tuples[i-1]
 			}
 			curCount = 1
 		}
@@ -231,7 +238,7 @@ func (r *consensusRound) GetMaxProposed() (s State, count int) {
 	// if the last hash is the maximum occurred
 	if curCount > maxCount {
 		maxCount = curCount
-		maxState = r.roundChanges[n-1]
+		maxState = sorter.tuples[n-1]
 	}
 
 	return maxState.Message.State, maxCount
@@ -1040,10 +1047,6 @@ func (c *Consensus) broadcastRoundChange() {
 	if data == nil {
 		// if there's none locked data, we pick the maximum unconfirmed data to propose
 		data = c.maximalUnconfirmed()
-		// if still null, return
-		if data == nil {
-			return
-		}
 	}
 
 	var m Message
@@ -1724,6 +1727,14 @@ func (c *Consensus) receiveMessage(bts []byte, now time.Time) error {
 // internal error via setError (formerly a panic), that error is surfaced here
 // so the embedder always observes it.
 func (c *Consensus) Update(now time.Time) (err error) {
+	if now.Second() % 5 == 0 && now.Nanosecond() < 50000000 {
+		var idByte byte
+		if len(c.identity) > 0 {
+			idByte = c.identity[0]
+		}
+		println("BDLS Update: identity =", idByte, "stage =", c.currentRound.Stage, "round =", c.currentRound.RoundNumber, "peers =", len(c.peers))
+	}
+
 	// as in ReceiveMessage, we also need to handle broadcasting messages
 	// directed to myself.
 	defer func() {
@@ -1748,6 +1759,10 @@ func (c *Consensus) Update(now time.Time) (err error) {
 			// the embedder halt this consensus instance cleanly instead of
 			// crashing the whole orderer.
 			return ErrRoundChangeTimeoutNotSet
+		}
+
+		if now.Second() % 5 == 0 && now.Nanosecond() < 50000000 { // throttle to print once every 5 seconds per node
+			println("BDLS stageRoundChanging: identity =", c.identity[0], "now =", now.Format(time.RFC3339Nano), "rcTimeout =", c.rcTimeout.Format(time.RFC3339Nano), "after =", now.After(c.rcTimeout), "peers =", len(c.peers))
 		}
 
 		if now.After(c.rcTimeout) {

@@ -18,6 +18,7 @@ import (
 	"github.com/hyperledger/fabric-lib-go/common/flogging"
 	"github.com/hyperledger/fabric-lib-go/common/metrics"
 	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric-protos-go-apiv2/msp"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/crypto"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
@@ -29,6 +30,7 @@ import (
 	bdlsproto "github.com/hyperledger/fabric/orderer/consensus/bdls/protos"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
+	"google.golang.org/protobuf/proto"
 )
 
 // ---------------------------------------------------------------------------
@@ -155,7 +157,12 @@ func New(
 		if err != nil {
 			logger.Warnf("BDLS consenter: failed to serialise signer identity: %v", err)
 		} else {
-			c.Identity = idBytes
+			sID := &msp.SerializedIdentity{}
+			if err := proto.Unmarshal(idBytes, sID); err != nil {
+				logger.Warnf("BDLS consenter: failed to unmarshal identity: %v", err)
+			} else {
+				c.Identity = sID.IdBytes
+			}
 		}
 	}
 
@@ -212,13 +219,12 @@ func (c *Consenter) HandleChain(support consensus.ConsenterSupport, metadata *cb
 		return nil, errors.Wrap(err, "building bdls.Config")
 	}
 
-	// Wire the signer. From BDLS's point of view this turns our Config
-	// from a "verify-only" skeleton into a fully-functional consensus
-	// identity: SignDigest is called each time BDLS emits a
-	// <propose>/<lock>/<decide>, PublicKey is used to derive the
-	// participant identity on verify.
-	cfg.PublicKey = c.TLSPublicKey
-	cfg.SignDigest = makeSignDigest(c.TLSPrivateKey)
+	// Wire the private key. The BDLS library's Config.PrivateKey is
+	// the single field that drives both signing (BDLS calls
+	// ecdsa.Sign internally on each <roundchange>/<lock>/<commit>) and
+	// identity derivation (DefaultPubKeyToIdentity(&PrivateKey.PublicKey)
+	// is used to find this node in the Participants slice).
+	cfg.PrivateKey = c.TLSPrivateKey
 
 	// Resolve the channel's cluster-layer membership (TLS certs, MSP
 	// TLS root CAs, endpoints) by walking the last config block. This

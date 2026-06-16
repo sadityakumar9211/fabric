@@ -72,7 +72,11 @@ func (d *Dispatcher) OnConsensus(channel string, sender uint64, request *orderer
 		}
 		return errors.Errorf("channel %s doesn't exist", channel)
 	}
-	return recv.Consensus(request, sender)
+	err := recv.Consensus(request, sender)
+	if err != nil && d.Logger != nil {
+		d.Logger.Errorf("bdls dispatcher: recv.Consensus failed for channel %q from sender %d: %v", channel, sender, err)
+	}
+	return err
 }
 
 // OnSubmit is invoked by the cluster service when a remote orderer
@@ -85,5 +89,9 @@ func (d *Dispatcher) OnSubmit(channel string, sender uint64, request *orderer.Su
 		}
 		return errors.Errorf("channel %s doesn't exist", channel)
 	}
-	return recv.Submit(request, sender)
+	err := recv.Submit(request, sender)
+	if err != nil && d.Logger != nil {
+		d.Logger.Errorf("bdls dispatcher: recv.Submit failed for channel %q from sender %d: %v", channel, sender, err)
+	}
+	return err
 }

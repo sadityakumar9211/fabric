@@ -9,7 +9,6 @@ package bdls
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
 	"math/big"
@@ -91,30 +90,6 @@ func loadClusterTLSPrivateKey(keyPath string) (*ecdsa.PrivateKey, error) {
 		return key, nil
 	}
 	return nil, errors.Errorf("bdls signer: %q is not a PKCS#8 or SEC1 ECDSA private key", keyPath)
-}
-
-// makeSignDigest builds the closure that BDLS's bdlslib.Config.SignDigest
-// expects. BDLS pre-hashes the message into `digest` and expects us to
-// produce the raw (r, s) byte slices of an ECDSA signature over that
-// digest — no outer hashing, no DER envelope, no length prefix.
-//
-// We deliberately do NOT call ecdsa.SignASN1 here because BDLS's internal
-// Verify path reconstructs (r, s) from the two byte slices directly; an
-// ASN.1 round-trip would just cost cycles.
-//
-// The returned byte slices use big-endian two's-complement
-// representation (math/big.Int.Bytes), matching what
-// crypto/ecdsa.Sign returns. bdls/crypto.go Verify reads them back via
-// new(big.Int).SetBytes, so the encoding is symmetric with no padding
-// required.
-func makeSignDigest(priv *ecdsa.PrivateKey) func(digest []byte) (rBytes, sBytes []byte, err error) {
-	return func(digest []byte) ([]byte, []byte, error) {
-		r, s, err := ecdsa.Sign(rand.Reader, priv, digest)
-		if err != nil {
-			return nil, nil, errors.Wrap(err, "bdls signer: ecdsa.Sign")
-		}
-		return r.Bytes(), s.Bytes(), nil
-	}
 }
 
 // publicKeyFromTLSCert extracts an *ecdsa.PublicKey from a PEM-encoded

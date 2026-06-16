@@ -1247,7 +1247,7 @@ func (n *Network) Osnadmin(command Command) (*gexec.Session, error) {
 // can be used to start and manage an orderer process.
 func (n *Network) OrdererRunner(o *Orderer, env ...string) *ginkgomon.Runner {
 	cmd := exec.Command(n.Components.Orderer())
-	cmd.Env = os.Environ()
+	cmd.Env = cleanEnv(os.Environ())
 	cmd.Env = append(cmd.Env, fmt.Sprintf("FABRIC_CFG_PATH=%s", n.OrdererDir(o)))
 	cmd.Env = append(cmd.Env, fabricLoggingSpec)
 	cmd.Env = append(cmd.Env, env...)

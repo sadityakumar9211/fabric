@@ -124,6 +124,9 @@ func (p *peerAdapter) RemoteAddr() net.Addr {
 // existing orderer cluster stream. We never crack open the payload here —
 // the wire format is owned by the BDLS library, not the transport.
 func (p *peerAdapter) Send(msg []byte) error {
+	if p.logger != nil {
+		p.logger.Debugf("bdls peerAdapter.Send: sending msg to %d, len %d", p.destination, len(msg))
+	}
 	err := p.rpc.SendConsensus(p.destination, &orderer.ConsensusRequest{
 		Channel: p.channelID,
 		Payload: msg,
