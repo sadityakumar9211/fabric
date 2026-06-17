@@ -36,8 +36,8 @@ jobs:
           --color=always \
           --exclude="^(https:\/\/hyperledger-fabric\.readthedocs\.io\/([A-Za-z_]+\/(v[\d]+\.[\d]+\.[\d]+|release)|(es|fa|fr|it|ja|ko|ml|pt|ru|vi|zh-cn|zh_CN)\/latest)).*$" \
           --exclude="https://github\.com/YOURGITHUBID/fabric-docs-i18n/pull/new/newtranslation" \
-          --exclude="https://docs\.goquorum\.consensys\.io/.*" \
-          --exclude="https://docs\.couchdb\.org/.*" \
+          --exclude="https?://docs\.goquorum\.consensys\.io/.*" \
+          --exclude="https?://docs\.couchdb\.org/.*" \
           https://hyperledger-fabric.readthedocs.io/en/latest/
   broken-link-checker-25:
     # Only run the scheduled job in hyperledger/fabric repository, not on personal forks
@@ -63,6 +63,6 @@ jobs:
           --color=always \
           --exclude="^(https:\/\/hyperledger-fabric\.readthedocs\.io\/[A-Za-z_]+\/(v[\d]+\.[\d]+\.[\d]+|release-1\.4|release-2\.0|release-2\.1|release-2\.2|release-2\.3|latest)).*$" \
           --exclude="https://github\.com/YOURGITHUBID/fabric-docs-i18n/pull/new/newtranslation" \
-          --exclude="https://docs\.goquorum\.consensys\.io/.*" \
-          --exclude="https://docs\.couchdb\.org/.*" \
+          --exclude="https?://docs\.goquorum\.consensys\.io/.*" \
+          --exclude="https?://docs\.couchdb\.org/.*" \
           https://hyperledger-fabric.readthedocs.io/en/release-2.5/
