@@ -38,6 +38,8 @@ jobs:
           --exclude="https://github\.com/YOURGITHUBID/fabric-docs-i18n/pull/new/newtranslation" \
           --exclude="https?://docs\.goquorum\.consensys\.io/.*" \
           --exclude="https?://docs\.couchdb\.org/.*" \
+          --exclude="https?://(www\.)?sphinx-doc\.org/.*" \
+          --exclude="http://pmg\.csail\.mit\.edu/papers/osdi99\.pdf" \
           https://hyperledger-fabric.readthedocs.io/en/latest/
   broken-link-checker-25:
     # Only run the scheduled job in hyperledger/fabric repository, not on personal forks
@@ -65,4 +67,6 @@ jobs:
           --exclude="https://github\.com/YOURGITHUBID/fabric-docs-i18n/pull/new/newtranslation" \
           --exclude="https?://docs\.goquorum\.consensys\.io/.*" \
           --exclude="https?://docs\.couchdb\.org/.*" \
+          --exclude="https?://(www\.)?sphinx-doc\.org/.*" \
+          --exclude="http://pmg\.csail\.mit\.edu/papers/osdi99\.pdf" \
           https://hyperledger-fabric.readthedocs.io/en/release-2.5/
