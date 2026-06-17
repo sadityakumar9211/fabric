@@ -247,11 +247,8 @@ func NewOrdererGroup(conf *genesisconfig.Orderer, channelCapabilities map[string
 		}
 		addValue(ordererGroup, channelconfig.OrderersValue(consenterProtos), channelconfig.AdminsPolicyKey)
 
-		// Build a minimal bdlsproto.ConfigMetadata. The per-consenter
-		// host/port/TLS cert/identity fields mirror the BFT ConsenterMapping
-		// 1:1; Options is left at zero values so the BDLS library picks
-		// its own Δ defaults — operators can tune them later via a
-		// channel config update that ships a populated Options block.
+		// Build bdlsproto.ConfigMetadata. The per-consenter host/port/TLS
+		// cert/identity fields mirror the BFT ConsenterMapping 1:1.
 		// The bdlsproto.Consenter type deliberately omits the numeric Id
 		// field — BDLS derives its participant id from the ECDSA (X, Y)
 		// coordinates of the TLS public key via DefaultPubKeyToIdentity,
@@ -266,9 +263,13 @@ func NewOrdererGroup(conf *genesisconfig.Orderer, channelCapabilities map[string
 				Identity:      c.Identity,
 			})
 		}
+		bdlsOptions := conf.BDLS
+		if bdlsOptions == nil {
+			bdlsOptions = &bdlsproto.Options{ReliableDecide: true}
+		}
 		bdlsMD := &bdlsproto.ConfigMetadata{
 			Consenters: bdlsConsenters,
-			Options:    &bdlsproto.Options{ReliableDecide: true},
+			Options:    bdlsOptions,
 		}
 		consensusMetadata, err = proto.Marshal(bdlsMD)
 		if err != nil {

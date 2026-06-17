@@ -44,6 +44,17 @@ Orderer:
     MaxMessageCount: 500
     AbsoluteMaxBytes: 10 MB
     PreferredMaxBytes: 2 MB
+  BDLS:
+    LatencyMs: 100
+    Delta0Ms: 0
+    Delta1Ms: 0
+    DeltaPrime1Ms: 0
+    Delta2Ms: 0
+    Delta3Ms: 0
+    RequestBatchMaxCount: 500
+    RequestBatchMaxBytesSize: 10485760
+    RequestBatchMaxIntervalMs: 1000
+    ReliableDecide: true
   ConsenterMapping:
   - ID: 1
     Host: orderer1.example.com
@@ -95,13 +106,13 @@ by the other ordering services:
 
 BDLS also has protocol timing knobs in its consensus metadata:
 
-* `latency_ms`
-* `delta0_ms`
-* `delta1_ms`
-* `delta_prime1_ms`
-* `delta2_ms`
-* `delta3_ms`
-* `reliable_decide`
+* `LatencyMs` (`latency_ms`)
+* `Delta0Ms` (`delta0_ms`)
+* `Delta1Ms` (`delta1_ms`)
+* `DeltaPrime1Ms` (`delta_prime1_ms`)
+* `Delta2Ms` (`delta2_ms`)
+* `Delta3Ms` (`delta3_ms`)
+* `ReliableDecide` (`reliable_decide`)
 
 For local integration networks, start with the default delta values and tune
 Fabric batching first. For WAN or high-jitter networks, raise `latency_ms` or
@@ -123,7 +134,9 @@ go test ./integration/bdls -run '^$' -bench '^BenchmarkOrderingThroughput$' -ben
   -bdls.bench.consensus=all \
   -bdls.bench.batch-timeout=1s \
   -bdls.bench.max-message-count=500 \
-  -bdls.bench.preferred-max-bytes-kb=512
+  -bdls.bench.preferred-max-bytes-kb=512 \
+  -bdls.bench.latency=100ms \
+  -bdls.bench.delta0=0
 ```
 
 When `-bdls.bench.payload-bytes` is greater than zero, the benchmark uses the
@@ -138,6 +151,7 @@ Run each configuration multiple times and compare:
 * `BatchTimeout`
 * `MaxMessageCount`
 * `PreferredMaxBytes`
+* BDLS delta and latency settings
 * consensus type (`BDLS`, `BFT`, `etcdraft`)
 
 Use the same chaincode, endorsement policy, block size, and transaction count

@@ -20,6 +20,7 @@ import (
 	"github.com/hyperledger/fabric/common/viperutil"
 	cf "github.com/hyperledger/fabric/core/config"
 	"github.com/hyperledger/fabric/msp"
+	bdlsproto "github.com/hyperledger/fabric/orderer/consensus/bdls/protos"
 )
 
 const (
@@ -158,6 +159,7 @@ type Orderer struct {
 	ConsenterMapping []*Consenter             `yaml:"ConsenterMapping"`
 	EtcdRaft         *etcdraft.ConfigMetadata `yaml:"EtcdRaft"`
 	SmartBFT         *smartbft.Options        `yaml:"SmartBFT"`
+	BDLS             *bdlsproto.Options       `yaml:"BDLS"`
 	Organizations    []*Organization          `yaml:"Organizations"`
 	MaxChannels      uint64                   `yaml:"MaxChannels"`
 	Capabilities     map[string]bool          `yaml:"Capabilities"`
@@ -426,10 +428,7 @@ loop:
 		// TLS certs, identity, MSP id) because both consenters identify
 		// members by TLS cert public key. Validate the mapping with the
 		// same rules as BFT so misconfigured YAML fails at genesis time
-		// rather than at HandleChain time. The BDLS Δ knobs do not
-		// appear in Profile today — zero means "library default", which
-		// is what Phase C9 wires. Operators can tune them via a channel
-		// config update once the Phase C7b crypto wiring lands.
+		// rather than at HandleChain time.
 		if len(ord.ConsenterMapping) == 0 {
 			logger.Panicf("%s configuration did not specify any consenter", BDLS)
 		}

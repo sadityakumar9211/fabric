@@ -37,6 +37,12 @@ var (
 	benchAbsoluteMaxBytesMB  = flag.Int("bdls.bench.absolute-max-bytes-mb", 10, "Fabric orderer BatchSize.AbsoluteMaxBytes in MB")
 	benchPreferredMaxBytesKB = flag.Int("bdls.bench.preferred-max-bytes-kb", 512, "Fabric orderer BatchSize.PreferredMaxBytes in KB")
 	benchPayloadBytes        = flag.Int("bdls.bench.payload-bytes", 0, "response payload bytes for the simple chaincode respond path; 0 uses state-changing invoke")
+	benchBDLSDelta0          = flag.Duration("bdls.bench.delta0", 0, "BDLS delta0 timeout; 0 uses the BDLS library default")
+	benchBDLSDelta1          = flag.Duration("bdls.bench.delta1", 0, "BDLS delta1 timeout; 0 uses the BDLS library default")
+	benchBDLSDeltaPrime1     = flag.Duration("bdls.bench.delta-prime1", 0, "BDLS delta-prime1 timeout; 0 uses the BDLS library default")
+	benchBDLSDelta2          = flag.Duration("bdls.bench.delta2", 0, "BDLS delta2 timeout; 0 uses the BDLS library default")
+	benchBDLSDelta3          = flag.Duration("bdls.bench.delta3", 0, "BDLS delta3 timeout; 0 uses the BDLS library default")
+	benchBDLSLatency         = flag.Duration("bdls.bench.latency", 0, "BDLS base latency; 0 uses the BDLS library default")
 )
 
 func BenchmarkOrderingThroughput(b *testing.B) {
@@ -108,6 +114,12 @@ func runOrderingBenchmark(b *testing.B, consensusType string) {
 		{"absolute_max_bytes_mb", float64(*benchAbsoluteMaxBytesMB)},
 		{"preferred_max_bytes_kb", float64(*benchPreferredMaxBytesKB)},
 		{"payload_bytes", float64(*benchPayloadBytes)},
+		{"bdls_delta0_ms", float64(benchBDLSDelta0.Milliseconds())},
+		{"bdls_delta1_ms", float64(benchBDLSDelta1.Milliseconds())},
+		{"bdls_delta_prime1_ms", float64(benchBDLSDeltaPrime1.Milliseconds())},
+		{"bdls_delta2_ms", float64(benchBDLSDelta2.Milliseconds())},
+		{"bdls_delta3_ms", float64(benchBDLSDelta3.Milliseconds())},
+		{"bdls_latency_ms", float64(benchBDLSLatency.Milliseconds())},
 	} {
 		b.ReportMetric(metric.value, metric.name)
 	}
@@ -152,11 +164,28 @@ func benchmarkNetworkConfig(b *testing.B, consensusType, channel string) *nwo.Co
 
 	config.Channels = nil
 	for _, profile := range config.Profiles {
+		if len(profile.AppCapabilities) == 0 {
+			profile.AppCapabilities = []string{"V2_0"}
+		}
 		profile.Blocks = &nwo.Blocks{
 			BatchTimeout:      int(benchBatchTimeout.Round(time.Second) / time.Second),
 			MaxMessageCount:   *benchMaxMessageCount,
 			AbsoluteMaxBytes:  *benchAbsoluteMaxBytesMB,
 			PreferredMaxBytes: *benchPreferredMaxBytesKB,
+		}
+		if consensusType == "BDLS" {
+			profile.BDLS = &nwo.BDLS{
+				Delta0Ms:                  int(benchBDLSDelta0.Milliseconds()),
+				Delta1Ms:                  int(benchBDLSDelta1.Milliseconds()),
+				DeltaPrime1Ms:             int(benchBDLSDeltaPrime1.Milliseconds()),
+				Delta2Ms:                  int(benchBDLSDelta2.Milliseconds()),
+				Delta3Ms:                  int(benchBDLSDelta3.Milliseconds()),
+				LatencyMs:                 int(benchBDLSLatency.Milliseconds()),
+				RequestBatchMaxCount:      *benchMaxMessageCount,
+				RequestBatchMaxBytesSize:  *benchAbsoluteMaxBytesMB * 1024 * 1024,
+				RequestBatchMaxIntervalMs: int(benchBatchTimeout.Milliseconds()),
+				ReliableDecide:            true,
+			}
 		}
 	}
 	for _, peer := range config.Peers {

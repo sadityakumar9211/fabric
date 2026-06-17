@@ -62,6 +62,20 @@ type SmartBFT struct {
 	LeaderHeartbeatCount   int `yaml:"leader_heartbeat_count,omitempty"`
 }
 
+// BDLS defines the configuration of BDLS options.
+type BDLS struct {
+	Delta0Ms                  int  `yaml:"delta0_ms,omitempty"`
+	Delta1Ms                  int  `yaml:"delta1_ms,omitempty"`
+	DeltaPrime1Ms             int  `yaml:"delta_prime1_ms,omitempty"`
+	Delta2Ms                  int  `yaml:"delta2_ms,omitempty"`
+	Delta3Ms                  int  `yaml:"delta3_ms,omitempty"`
+	LatencyMs                 int  `yaml:"latency_ms,omitempty"`
+	RequestBatchMaxCount      int  `yaml:"request_batch_max_count,omitempty"`
+	RequestBatchMaxBytesSize  int  `yaml:"request_batch_max_bytes_size,omitempty"`
+	RequestBatchMaxIntervalMs int  `yaml:"request_batch_max_interval_ms,omitempty"`
+	ReliableDecide            bool `yaml:"reliable_decide,omitempty"`
+}
+
 // Organization models information about an Organization. It includes
 // the information needed to populate an MSP with cryptogen.
 type Organization struct {
@@ -143,6 +157,7 @@ type Profile struct {
 	ChannelCapabilities []string  `yaml:"channel_capabilities,omitempty"`
 	Blocks              *Blocks   `yaml:"blocks,omitempty"`
 	SmartBFT            *SmartBFT `yaml:"smart_bft,omitempty"`
+	BDLS                *BDLS     `yaml:"bdls,omitempty"`
 }
 
 // Network holds information about a fabric network.

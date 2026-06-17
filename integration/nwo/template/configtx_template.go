@@ -186,6 +186,19 @@ Profiles:{{ range .Profiles }}
         {{- end }}{{- end }}
       {{- end }}
       {{- if eq $w.Consensus.Type "BDLS" }}
+      {{- if .BDLS}}
+      BDLS:
+        Delta0Ms:                  {{ .BDLS.Delta0Ms }}
+        Delta1Ms:                  {{ .BDLS.Delta1Ms }}
+        DeltaPrime1Ms:             {{ .BDLS.DeltaPrime1Ms }}
+        Delta2Ms:                  {{ .BDLS.Delta2Ms }}
+        Delta3Ms:                  {{ .BDLS.Delta3Ms }}
+        LatencyMs:                 {{ .BDLS.LatencyMs }}
+        RequestBatchMaxCount:      {{ .BDLS.RequestBatchMaxCount }}
+        RequestBatchMaxBytesSize:  {{ .BDLS.RequestBatchMaxBytesSize }}
+        RequestBatchMaxIntervalMs: {{ .BDLS.RequestBatchMaxIntervalMs }}
+        ReliableDecide:            {{ .BDLS.ReliableDecide }}
+      {{- end }}
       ConsenterMapping:{{ range $index, $orderer := .Orderers }}{{ with $w.Orderer . }}
       - ID: {{ .Id }}
         Host: 127.0.0.1
