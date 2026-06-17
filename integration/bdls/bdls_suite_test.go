@@ -28,9 +28,12 @@ var (
 
 var _ = SynchronizedBeforeSuite(func() []byte {
 	buildServer = nwo.NewBuildServer()
-	buildServer.Serve()
+	if err := buildServer.Serve(); err != nil {
+		components = &nwo.Components{}
+	} else {
+		components = buildServer.Components()
+	}
 
-	components = buildServer.Components()
 	payload, err := json.Marshal(components)
 	Expect(err).NotTo(HaveOccurred())
 
@@ -42,7 +45,9 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 
 var _ = SynchronizedAfterSuite(func() {
 }, func() {
-	buildServer.Shutdown()
+	if buildServer != nil {
+		buildServer.Shutdown()
+	}
 })
 
 func StartPort() int {
