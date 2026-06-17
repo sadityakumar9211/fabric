@@ -234,6 +234,10 @@ func (c *Consenter) HandleChain(support consensus.ConsenterSupport, metadata *cb
 	if err != nil {
 		return nil, errors.Wrap(err, "building cluster remote-node view")
 	}
+	if selfID >= uint64(len(channelConsenters)) {
+		return nil, errors.Errorf("detected BDLS self index %d outside channel consenter set of size %d", selfID, len(channelConsenters))
+	}
+	selfConsenterID := channelConsenters[selfID].Id
 
 	// Configure the *inbound* path: teach the shared ClusterService
 	// which identities are authorized to send StepRequests on this
@@ -308,12 +312,12 @@ func (c *Consenter) HandleChain(support consensus.ConsenterSupport, metadata *cb
 		bdlsConsensus.Join(p)
 	}
 
-	chain, err := NewChain(support, bdlsConsensus, md, peers, c.Metrics)
+	chain, err := NewChain(support, bdlsConsensus, md, peers, c.Metrics, selfConsenterID)
 	if err != nil {
 		return nil, errors.Wrap(err, "constructing BDLS chain")
 	}
-	c.Logger.Infof("BDLS HandleChain: channel=%s constructed live chain (peers=%d, selfID=%d)",
-		support.ChannelID(), len(peers), selfID)
+	c.Logger.Infof("BDLS HandleChain: channel=%s constructed live chain (peers=%d, selfID=%d, consenterID=%d)",
+		support.ChannelID(), len(peers), selfID, selfConsenterID)
 	return chain, nil
 }
 

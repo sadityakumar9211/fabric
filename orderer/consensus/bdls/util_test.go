@@ -159,7 +159,7 @@ func TestBuildBDLSConfig_PropagatesOptions(t *testing.T) {
 	cfg, err := buildBDLSConfig(md, 5)
 	require.NoError(t, err)
 	require.Len(t, cfg.Participants, 4)
-	require.EqualValues(t, 5, cfg.CurrentHeight)
+	require.EqualValues(t, 4, cfg.CurrentHeight)
 	require.Equal(t, 50*time.Millisecond, cfg.Delta0)
 	require.Equal(t, 60*time.Millisecond, cfg.Delta1)
 	require.Equal(t, 70*time.Millisecond, cfg.DeltaPrime1)

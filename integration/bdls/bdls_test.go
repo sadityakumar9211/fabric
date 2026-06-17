@@ -73,11 +73,9 @@ var _ = Describe("EndToEnd BDLS ordering service", func() {
 			network.GenerateConfigTree()
 			network.Bootstrap()
 
-			var ordererRunners []*ginkgomon.Runner
 			for _, orderer := range network.Orderers {
 				runner := network.OrdererRunner(orderer)
-				runner.Command.Env = append(runner.Command.Env, "FABRIC_LOGGING_SPEC=orderer.consensus.bdls=debug:grpc=debug")
-				ordererRunners = append(ordererRunners, runner)
+				runner.Command.Env = append(runner.Command.Env, "FABRIC_LOGGING_SPEC=orderer.consensus.bdls=debug:orderer.common.multichannel=debug:orderer.common.broadcast=debug:deliveryClient=debug:grpc=debug")
 				proc := ifrit.Invoke(runner)
 				ordererProcesses = append(ordererProcesses, proc)
 				Eventually(proc.Ready(), network.EventuallyTimeout).Should(BeClosed())
@@ -120,14 +118,12 @@ var _ = Describe("EndToEnd BDLS ordering service", func() {
 				Eventually(proc.Wait(), network.EventuallyTimeout).Should(Receive())
 			}
 
-			ordererRunners = nil
 			ordererProcesses = nil
 
 			By("Bringing all orderers back up")
 			for _, orderer := range network.Orderers {
 				runner := network.OrdererRunner(orderer)
-				runner.Command.Env = append(runner.Command.Env, "FABRIC_LOGGING_SPEC=orderer.consensus.bdls=debug:grpc=debug")
-				ordererRunners = append(ordererRunners, runner)
+				runner.Command.Env = append(runner.Command.Env, "FABRIC_LOGGING_SPEC=orderer.consensus.bdls=debug:orderer.common.multichannel=debug:orderer.common.broadcast=debug:deliveryClient=debug:grpc=debug")
 				proc := ifrit.Invoke(runner)
 				ordererProcesses = append(ordererProcesses, proc)
 				Eventually(proc.Ready(), network.EventuallyTimeout).Should(BeClosed())
@@ -149,11 +145,9 @@ var _ = Describe("EndToEnd BDLS ordering service", func() {
 			network.GenerateConfigTree()
 			network.Bootstrap()
 
-			var ordererRunners []*ginkgomon.Runner
 			for _, orderer := range network.Orderers {
 				runner := network.OrdererRunner(orderer)
-				runner.Command.Env = append(runner.Command.Env, "FABRIC_LOGGING_SPEC=orderer.consensus.bdls=debug:grpc=debug")
-				ordererRunners = append(ordererRunners, runner)
+				runner.Command.Env = append(runner.Command.Env, "FABRIC_LOGGING_SPEC=orderer.consensus.bdls=debug:orderer.common.multichannel=debug:orderer.common.broadcast=debug:deliveryClient=debug:grpc=debug")
 				proc := ifrit.Invoke(runner)
 				ordererProcesses = append(ordererProcesses, proc)
 				Eventually(proc.Ready(), network.EventuallyTimeout).Should(BeClosed())
@@ -225,6 +219,7 @@ func peerGroupRunners(n *nwo.Network) (ifrit.Runner, []*ginkgomon.Runner) {
 	members := grouper.Members{}
 	for _, p := range n.Peers {
 		runner := n.PeerRunner(p)
+		runner.Command.Env = append(runner.Command.Env, "FABRIC_LOGGING_SPEC=debug")
 		members = append(members, grouper.Member{Name: p.ID(), Runner: runner})
 		runners = append(runners, runner)
 	}
@@ -266,7 +261,7 @@ func invokeQuery(network *nwo.Network, peer *nwo.Peer, orderer *nwo.Orderer, cha
 		sess, err := network.PeerUserSession(peer, "User1", commands.ChaincodeQuery{
 			ChannelID: channel,
 			Name:      "mycc",
-			Ctor:      fmt.Sprintf(`{"Args":["query","a"]}`),
+			Ctor:      `{"Args":["query","a"]}`,
 		})
 		Eventually(sess, network.EventuallyTimeout).Should(gexec.Exit())
 		if sess.ExitCode() != 0 {

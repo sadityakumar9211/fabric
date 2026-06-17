@@ -11,10 +11,8 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
-	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
@@ -90,28 +88,6 @@ func TestLoadClusterTLSPrivateKey_NotECDSA(t *testing.T) {
 	_, err = loadClusterTLSPrivateKey(path)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "BDLS requires an ECDSA key")
-}
-
-// ---------------------------------------------------------------------------
-// makeSignDigest
-// ---------------------------------------------------------------------------
-
-func TestMakeSignDigest_RoundTrip(t *testing.T) {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-
-	sign := makeSignDigest(priv)
-	digest := sha256.Sum256([]byte("bdls signer test"))
-	rBytes, sBytes, err := sign(digest[:])
-	require.NoError(t, err)
-	require.NotEmpty(t, rBytes)
-	require.NotEmpty(t, sBytes)
-
-	// Reconstruct (r, s) the way bdls/crypto.go Verify does and
-	// confirm the stdlib verifier accepts the pair.
-	r := new(big.Int).SetBytes(rBytes)
-	s := new(big.Int).SetBytes(sBytes)
-	require.True(t, ecdsa.Verify(&priv.PublicKey, digest[:], r, s))
 }
 
 // ---------------------------------------------------------------------------

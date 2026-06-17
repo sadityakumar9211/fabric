@@ -659,7 +659,7 @@ func initializeMultichannelRegistrar(
 	consenters["BDLS"] = bdlsConsenter
 
 	smartBFTConsenter.ClusterService.RequestHandler = &clusterRequestMultiplexer{
-		primary:   smartBFTConsenter.ClusterService.RequestHandler,
+		primary: smartBFTConsenter.ClusterService.RequestHandler,
 		fallback: &bdls.Dispatcher{
 			Logger:        flogging.MustGetLogger("orderer.consensus.bdls.dispatcher"),
 			ChainSelector: bdlsConsenter,

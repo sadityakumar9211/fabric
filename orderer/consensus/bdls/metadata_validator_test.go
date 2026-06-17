@@ -32,15 +32,16 @@ type stubOrdererConfig struct {
 	metadata []byte
 }
 
-func (s *stubOrdererConfig) ConsensusType() string            { return s.cType }
-func (s *stubOrdererConfig) ConsensusMetadata() []byte        { return s.metadata }
+func (s *stubOrdererConfig) ConsensusType() string     { return s.cType }
+func (s *stubOrdererConfig) ConsensusMetadata() []byte { return s.metadata }
 func (s *stubOrdererConfig) ConsensusState() ab.ConsensusType_State {
 	return ab.ConsensusType_STATE_NORMAL
 }
-func (s *stubOrdererConfig) BatchSize() *ab.BatchSize       { return &ab.BatchSize{} }
-func (s *stubOrdererConfig) BatchTimeout() time.Duration    { return 0 }
-func (s *stubOrdererConfig) MaxChannelsCount() uint64       { return 0 }
-func (s *stubOrdererConfig) Consenters() []*cb.Consenter    { return nil }
+
+func (s *stubOrdererConfig) BatchSize() *ab.BatchSize                           { return &ab.BatchSize{} }
+func (s *stubOrdererConfig) BatchTimeout() time.Duration                        { return 0 }
+func (s *stubOrdererConfig) MaxChannelsCount() uint64                           { return 0 }
+func (s *stubOrdererConfig) Consenters() []*cb.Consenter                        { return nil }
 func (s *stubOrdererConfig) Organizations() map[string]channelconfig.OrdererOrg { return nil }
 func (s *stubOrdererConfig) Capabilities() channelconfig.OrdererCapabilities    { return nil }
 

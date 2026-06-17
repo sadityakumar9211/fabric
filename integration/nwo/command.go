@@ -47,4 +47,3 @@ func NewCommand(path string, command Command) *exec.Cmd {
 	}
 	return cmd
 }
-

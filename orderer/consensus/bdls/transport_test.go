@@ -43,6 +43,13 @@ func (m *mockClusterRPC) SendConsensus(dest uint64, msg *orderer.ConsensusReques
 	return m.err
 }
 
+func (m *mockClusterRPC) SendSubmit(_ uint64, _ *orderer.SubmitRequest, report func(err error)) error {
+	if report != nil {
+		report(m.err)
+	}
+	return m.err
+}
+
 // ---------------------------------------------------------------------------
 // newPeerAdapter
 // ---------------------------------------------------------------------------

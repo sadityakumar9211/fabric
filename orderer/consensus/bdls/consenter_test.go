@@ -88,7 +88,7 @@ func TestHandleChain_NoClusterComm(t *testing.T) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	c := &Consenter{
-		Logger:       flogging.MustGetLogger("test"),
+		Logger:        flogging.MustGetLogger("test"),
 		TLSPrivateKey: priv,
 		TLSPublicKey:  &priv.PublicKey,
 	}

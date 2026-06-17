@@ -37,6 +37,7 @@ import (
 // whole cluster comm package.
 type clusterRPC interface {
 	SendConsensus(destination uint64, msg *orderer.ConsensusRequest) error
+	SendSubmit(destination uint64, request *orderer.SubmitRequest, report func(err error)) error
 }
 
 // fabricAddr is a net.Addr implementation that reports a host:port pair.
@@ -140,6 +141,19 @@ func (p *peerAdapter) Send(msg []byte) error {
 		return err
 	}
 	return nil
+}
+
+// SendSubmit sends a SubmitRequest over the existing cluster stream.
+func (p *peerAdapter) SendSubmit(msg *orderer.SubmitRequest) {
+	if p.logger != nil {
+		p.logger.Debugf("bdls peerAdapter.SendSubmit: sending msg to %d", p.destination)
+	}
+	_ = p.rpc.SendSubmit(p.destination, msg, func(err error) {
+		if err != nil && p.logger != nil {
+			p.logger.Debugf("bdls: SendSubmit to consenter %d on channel %s failed: %v",
+				p.destination, p.channelID, err)
+		}
+	})
 }
 
 // resetSendErrs is called by chain.go on a successful decide so the
